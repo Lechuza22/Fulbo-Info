@@ -24,12 +24,16 @@ FIRST_DATE = 'id1'
 # Scraping Fechas
 # ------------------------
 def get_dates_html():
-    page_source = r.get(f'{FIFA_URL}/{FIRST_DATE}/')
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    page_source = r.get(f'{FIFA_URL}/{FIRST_DATE}/', headers=headers)
     page_source.raise_for_status()
     dates = BeautifulSoup(page_source.text,
                           'html.parser',
                           parse_only=SoupStrainer('li', attrs={'class': 'fi-ranking-schedule__nav__item'}))
     return dates
+
 
 def create_dates_dataset(html_dates):
     date_ids = [li['data-value'] for li in html_dates]
