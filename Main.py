@@ -58,15 +58,20 @@ def scrapy_rank_table(page, date):
     rows = BeautifulSoup(page, 'html.parser', parse_only=SoupStrainer('tbody')).find_all('tr')
     tabla = []
     for row in rows:
-        tabla.append({
-            'id': int(row['data-team-id']),
-            'country': row.find('span', {'class': 'fi-t__nText'}).text,
-            'rank': int(row.find('td', {'class': 'fi-table__rank'}).text),
-            'points': int(row.find('td', {'class': 'fi-table__points'}).text),
-            'confederation': row.find('td', {'class': 'fi-table__confederation'}).text.strip(),
-            'rank_date': date
-        })
+        try:
+            tabla.append({
+                'id': int(row['data-team-id']),
+                'country': row.find('span', {'class': 'fi-t__nText'}).text.strip(),
+                'rank': int(row.find('td', {'class': 'fi-table__rank'}).text),
+                'points': int(row.find('td', {'class': 'fi-table__points'}).text),
+                'confederation': row.find('td', {'class': 'fi-table__confederation'}).text.strip(),
+                'rank_date': date
+            })
+        except Exception as e:
+            print(f"❌ Error al procesar fila: {e}")
+            continue
     return tabla
+
 
 async def parse_ranks(df_dates):
     final_df = pd.DataFrame()
