@@ -1,106 +1,118 @@
 import streamlit as st
 import pandas as pd
+import datetime
 import asyncio
 import aiohttp
-import datetime
-from bs4 import BeautifulSoup, SoupStrainer
 import requests as r
-import logging
+from bs4 import BeautifulSoup, SoupStrainer
 
-# ------------------------
-# Logging
-# ------------------------
-logger = logging.getLogger('log')
-logger.addHandler(logging.StreamHandler())
-logger.setLevel(logging.INFO)
-
-# ------------------------
-# URLs y Constantes
-# ------------------------
+# ----------------------------------------
+# 🔧 Configuración
+# ----------------------------------------
 FIFA_URL = 'https://www.fifa.com/fifa-world-ranking/ranking-table/men/rank'
 FIRST_DATE = 'id1'
 
-# ------------------------
-# Scraping Fechas
-# ------------------------
+# ----------------------------------------
+# 🏁 Utilidad para mostrar banderas
+# ----------------------------------------
+def get_flag_emoji(country):
+    flags = {
+        'Argentina': '🇦🇷', 'France': '🇫🇷', 'Brazil': '🇧🇷', 'Germany': '🇩🇪', 'Italy': '🇮🇹',
+        'Spain': '🇪🇸', 'Portugal': '🇵🇹', 'Netherlands': '🇳🇱', 'Uruguay': '🇺🇾', 'Belgium': '🇧🇪',
+        'Croatia': '🇭🇷', 'England': '🇬🇧', 'USA': '🇺🇸', 'Mexico': '🇲🇽', 'Japan': '🇯🇵',
+    }
+    return flags.get(country, '🏳️')
+
+# ----------------------------------------
+# 🌐 Scraping de fechas disponibles
+# ----------------------------------------
 def get_dates_html():
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
     page_source = r.get(f'{FIFA_URL}/{FIRST_DATE}/', headers=headers)
     page_source.raise_for_status()
-    dates = BeautifulSoup(page_source.text,
-                          'html.parser',
+    dates = BeautifulSoup(page_source.text, 'html.parser',
                           parse_only=SoupStrainer('li', attrs={'class': 'fi-ranking-schedule__nav__item'}))
     return dates
-
 
 def create_dates_dataset(html_dates):
     date_ids = [li['data-value'] for li in html_dates]
     dates = [li.text.strip() for li in html_dates]
-    dataset = pd.DataFrame(data={'date': dates, 'date_id': date_ids})
-    dataset['date'] = pd.to_datetime(dataset['date'], format='%d %B %Y')
-    dataset.sort_values('date', ignore_index=True, inplace=True)
-    return dataset
+    df = pd.DataFrame({'date': pd.to_datetime(dates, format='%d %B %Y'), 'date_id': date_ids})
+    df.sort_values('date', inplace=True)
+    return df
 
-# ------------------------
-# Scraping Ranking por Fecha
-# ------------------------
+# ----------------------------------------
+# 🔍 Scraping de ranking FIFA por fecha
+# ----------------------------------------
 async def get_rank_page(date_id, session):
-    async with session.get(f'{FIFA_URL}/{date_id}/') as response:
-        page = await response.text()
+    headers = {"User-Agent": "Mozilla/5.0"}
+    async with session.get(f'{FIFA_URL}/{date_id}/', headers=headers) as response:
         if response.status == 200:
-            return {'page': page, 'id': date_id}
+            return {'page': await response.text(), 'id': date_id}
         else:
-            return False
+            return None
 
 def scrapy_rank_table(page, date):
     rows = BeautifulSoup(page, 'html.parser', parse_only=SoupStrainer('tbody')).find_all('tr')
-    table = []
+    tabla = []
     for row in rows:
-        table.append({
+        tabla.append({
             'id': int(row['data-team-id']),
-            'country_full': row.find('span', {'class': 'fi-t__nText'}).text,
+            'country': row.find('span', {'class': 'fi-t__nText'}).text,
             'rank': int(row.find('td', {'class': 'fi-table__rank'}).text),
-            'total_points': int(row.find('td', {'class': 'fi-table__points'}).text),
+            'points': int(row.find('td', {'class': 'fi-table__points'}).text),
+            'confederation': row.find('td', {'class': 'fi-table__confederation'}).text.strip(),
             'rank_date': date
         })
-    return table
+    return tabla
 
-async def parse_ranks(pages_df):
-    fifa_ranking = pd.DataFrame(columns=['id', 'rank', 'country_full', 'total_points', 'rank_date'])
-    task_parse = []
+async def parse_ranks(df_dates):
+    final_df = pd.DataFrame()
     async with aiohttp.ClientSession() as session:
-        for date_id in pages_df.date_id.tail(1):  # Solo la fecha más reciente
-            task_parse.append(asyncio.create_task(get_rank_page(date_id, session)))
+        tasks = [get_rank_page(row.date_id, session) for _, row in df_dates.iterrows()]
+        results = await asyncio.gather(*tasks)
+        for result in results:
+            if result:
+                date = df_dates[df_dates.date_id == result['id']].date.iloc[0]
+                tabla = scrapy_rank_table(result['page'], date)
+                final_df = pd.concat([final_df, pd.DataFrame(tabla)], ignore_index=True)
+    return final_df
 
-        for task in asyncio.as_completed(task_parse):
-            page = await task
-            if not task:
-                continue
-            date_ranking = scrapy_rank_table(page['page'], pages_df[pages_df.date_id == page['id']].date.iloc[0])
-            fifa_ranking = pd.concat([fifa_ranking, pd.DataFrame(date_ranking)], ignore_index=True)
-    return fifa_ranking
-
-# ------------------------
-# Streamlit App
-# ------------------------
-st.set_page_config(page_title="Ranking FIFA", layout="centered")
-st.title("🏆 Ranking FIFA Masculino")
+# ----------------------------------------
+# 🖥️ Interfaz Streamlit
+# ----------------------------------------
+st.set_page_config(page_title="🏆 Ranking FIFA", layout="centered")
+st.title("🌍 Ranking FIFA Masculino (última fecha disponible)")
 
 if 'ranking_df' not in st.session_state:
-    with st.spinner('Obteniendo datos desde FIFA.com...'):
+    with st.spinner("Obteniendo datos desde FIFA.com..."):
         html_dates = get_dates_html()
         fechas_df = create_dates_dataset(html_dates)
-        ranking_df = asyncio.run(parse_ranks(fechas_df))
+        latest_date_df = fechas_df.tail(1)  # solo la más reciente
+        ranking_df = asyncio.run(parse_ranks(latest_date_df))
+
+        # Agregar banderas
+        ranking_df['Equipo'] = ranking_df['country'].apply(lambda x: f"{get_flag_emoji(x)} {x}")
         st.session_state['ranking_df'] = ranking_df
-else:
-    ranking_df = st.session_state['ranking_df']
 
-st.subheader("🌐 Ranking actual")
-st.dataframe(ranking_df)
+# Menú lateral
+menu = st.sidebar.radio("Menú", ["Ranking FIFA", "Detalle por Selección"])
+ranking_df = st.session_state['ranking_df']
 
-seleccion = st.selectbox("Seleccioná una selección:", ranking_df['country_full'].unique())
-fila = ranking_df[ranking_df['country_full'] == seleccion].iloc[0]
-st.metric("Posición FIFA", fila['rank'])
-st.metric("Puntos", fila['total_points'])
+# Menú principal
+if menu == "Ranking FIFA":
+    st.subheader("📊 Tabla de posiciones")
+    st.dataframe(ranking_df[['rank_date', 'rank', 'Equipo', 'points', 'confederation']])
+elif menu == "Detalle por Selección":
+    seleccion = st.selectbox("🌐 Selección", ranking_df['Equipo'].tolist())
+    fila = ranking_df[ranking_df['Equipo'] == seleccion]
+    if not fila.empty:
+        fila = fila.iloc[0]
+        st.markdown(f"## {seleccion}")
+        st.metric("Posición FIFA", fila['rank'])
+        st.metric("Puntos", fila['points'])
+        st.write(f"🌍 Confederación: {fila['confederation']}")
+    else:
+        st.warning("No se encontró la selección.")
